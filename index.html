@@ -14426,6 +14426,16 @@ if (window.location.href.includes("fools=true")) {
 	script.src = "mods/fools.js"
 	document.head.appendChild(script);
 }
+// Built-in mods for this site: always loaded, no Mod Manager needed.
+// Skipped if the same mod is also enabled in the Mod Manager.
+["mods/stainless_steel_solid.js"].forEach(function(src) {
+	let modName = src.split("/").pop();
+	if (enabledModNames.indexOf(modName) !== -1) { return; }
+	let script = document.createElement('script');
+	script.src = src;
+	script.addEventListener("load", function(){ loadedMods.push(modName); });
+	document.head.appendChild(script);
+});
 // Language Loader
 langCode = null;
 lang = {};
