@@ -30,7 +30,7 @@ elements.titanium = {
 	color: "#9aa0a8",
 	colorKey: {
 		"B": "#9aa0a8", // blue-gray base
-		"D": "#7c828b"  // darker specks
+		"D": "#5a6068"  // darker specks
 	},
 	colorPattern: titaniumPattern,
 	grain: 0,
