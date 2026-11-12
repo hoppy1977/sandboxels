@@ -14428,7 +14428,7 @@ if (window.location.href.includes("fools=true")) {
 }
 // Built-in mods for this site: always loaded, no Mod Manager needed.
 // Skipped if the same mod is also enabled in the Mod Manager.
-["mods/stainless_steel_solid.js"].forEach(function(src) {
+["mods/stainless_steel_solid.js", "mods/titanium.js"].forEach(function(src) {
 	let modName = src.split("/").pop();
 	if (enabledModNames.indexOf(modName) !== -1) { return; }
 	let script = document.createElement('script');
