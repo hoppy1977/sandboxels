@@ -14,6 +14,8 @@
 //   Steam / Cloud -> Water
 //   Foam / Bubble -> popped (gone)
 //
+// Using it on a gas compresses it, building up gas pressure (see gas_pressure.js).
+//
 // Other mods can add their own: set  elements.X.pressureInto = "Y"  (and optionally pressureChance).
 
 var PRESSURE_RECIPES = {
@@ -47,6 +49,10 @@ elements.pressure = {
 		if (!info || info.insulate !== true) {
 			pixel.temp += shiftDown ? 2 : 0.5;
 			pixelTempCheck(pixel);
+		}
+		// Squeezing a gas compresses it (works with gas_pressure.js).
+		if (info && info.state === "gas") {
+			pixel.pressure = Math.min(300, (pixel.pressure || 0) + (shiftDown ? 40 : 10));
 		}
 		if (!recipe || pixel.del) return;
 		var chance = recipe.chance * (shiftDown ? 4 : 1);
