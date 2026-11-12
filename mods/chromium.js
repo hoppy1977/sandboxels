@@ -3,7 +3,8 @@
 //
 // - Hard, shiny, bluish-silver metal. Never rusts.
 // - Melts at 1907°C into Molten Chromium.
-// - Make stainless steel: mix Chromium (solid or molten) into Molten Steel.
+// - Chromium Powder (in Powders): falls like sand. Smash solid chromium to get it.
+// - Make stainless steel: mix Chromium (powder, solid or molten) into Molten Steel. Powder mixes best.
 //   The mix becomes Molten Stainless Steel, which turns into solid Stainless Steel when it cools.
 //
 // Needs stainless_steel_solid.js to be loaded too (it is, in the built-in list in index.html).
@@ -41,7 +42,23 @@ elements.chromium = {
 	conduct: 0.35,
 	hardness: 0.95,
 	alias: "chrome",
-	desc: "A hard, shiny metal. Mix it into Molten Steel to make Stainless Steel."
+	breakInto: "chromium_powder",
+	desc: "A hard, shiny metal. Mix it into Molten Steel to make Stainless Steel. Smash it to get Chromium Powder."
+};
+
+// Chromium powder: falls and piles like sand, so it mixes into molten steel easily.
+elements.chromium_powder = {
+	color: ["#b7c0ca", "#c3ccd6", "#d4dce4", "#eef3f8"],
+	behavior: behaviors.POWDER,
+	category: "powders",
+	state: "solid",
+	tempHigh: 1907,
+	stateHigh: "molten_chromium",
+	density: 7190, // heavier than molten steel (about 7065), so it sinks in and mixes
+	conduct: 0.2,
+	hardness: 0.6,
+	alias: "chrome powder",
+	desc: "Powdered chromium. Sprinkle it into Molten Steel to make Stainless Steel."
 };
 
 // Molten forms are generated after mods load, so add the recipe afterwards.
@@ -61,5 +78,11 @@ runAfterAutogen(function() {
 		elem1: "molten_stainless_steel",
 		elem2: "molten_stainless_steel",
 		chance: 0.05
+	};
+	// Chromium powder sprinkled into molten steel mixes in quickly.
+	elements.molten_steel.reactions.chromium_powder = {
+		elem1: "molten_stainless_steel",
+		elem2: "molten_stainless_steel",
+		chance: 0.3
 	};
 });
