@@ -5,7 +5,7 @@
 // - Texture: light gray with dark gray specks and a dark vertical line every 25 pixels.
 // - Conducts electricity and heat a little less than steel.
 // - Melts at 1450°C into Molten Stainless Steel and solidifies back when cooled.
-// - Make it: mix Molten Steel with Molten Nickel.
+// - Make it: mix Molten Steel with Molten Nickel, or with Chromium (see chromium.js).
 //
 // Load it in the Mod Manager as: stainless_steel_solid.js
 // Note: don't load this together with stainless_steel.js; both define "stainless_steel".
@@ -47,7 +47,7 @@ elements.stainless_steel = {
 	conduct: 0.3,
 	hardness: 0.85,
 	alias: "inox",
-	desc: "Steel alloyed to resist rust. Make it by mixing Molten Steel with Molten Nickel."
+	desc: "Steel alloyed to resist rust. Make it by mixing Chromium or Molten Nickel into Molten Steel, then letting it cool."
 };
 
 // Molten forms are generated after mods load, so add the recipe afterwards.
