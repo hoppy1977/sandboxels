@@ -2,7 +2,7 @@
 // Adds stainless steel to the Solids category.
 //
 // - Works like regular steel, but never rusts in water, salt, blood, etc.
-// - Texture: plain light gray with a dark vertical line every 25 pixels.
+// - Texture: light gray with dark gray specks and a dark vertical line every 25 pixels.
 // - Conducts electricity and heat a little less than steel.
 // - Melts at 1450°C into Molten Stainless Steel and solidifies back when cooled.
 // - Make it: mix Molten Steel with Molten Nickel.
@@ -10,18 +10,31 @@
 // Load it in the Mod Manager as: stainless_steel_solid.js
 // Note: don't load this together with stainless_steel.js; both define "stainless_steel".
 
-// Texture: plain light gray, with a darker 1-pixel line running top to bottom every 25 pixels.
+// Texture: light gray with a sprinkle of dark gray specks (like steel),
+// and a darker 1-pixel line running top to bottom every 25 pixels.
 var STAINLESS_LINE_EVERY = 25;   // distance between the vertical lines, in pixels
-var stainlessRow = "";
-for (var x = 0; x < STAINLESS_LINE_EVERY; x++) {
-	stainlessRow += (x === 0) ? "S" : "L";
+var STAINLESS_SPECKS = 0.15;     // share of pixels that are dark gray specks (0 to 1)
+var stainlessSeed = 74;          // fixed seed so the specks look the same every time
+function stainlessRandom() {
+	stainlessSeed = (stainlessSeed * 16807) % 2147483647;
+	return stainlessSeed / 2147483647;
 }
-var stainlessPattern = [stainlessRow];
+var stainlessPattern = [];
+for (var y = 0; y < STAINLESS_LINE_EVERY; y++) {
+	var row = "";
+	for (var x = 0; x < STAINLESS_LINE_EVERY; x++) {
+		if (x === 0) { row += "S"; }
+		else if (stainlessRandom() < STAINLESS_SPECKS) { row += "D"; }
+		else { row += "L"; }
+	}
+	stainlessPattern.push(row);
+}
 
 elements.stainless_steel = {
 	color: "#b4bcc2",
 	colorKey: {
 		"L": "#b4bcc2", // light gray
+		"D": "#8a9298", // dark gray specks
 		"S": "#3f4448"  // darker gray line, top to bottom
 	},
 	colorPattern: stainlessPattern,
