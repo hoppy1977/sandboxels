@@ -2,7 +2,7 @@
 // Adds stainless steel to the Solids category.
 //
 // - Works like regular steel, but never rusts in water, salt, blood, etc.
-// - Checkerboard texture: 10-pixel dark/light gray squares with a light vertical line.
+// - Texture: pixel-by-pixel dark/light gray checkerboard with a dark vertical line every 25 pixels.
 // - Conducts electricity and heat a little less than steel.
 // - Melts at 1450°C into Molten Stainless Steel and solidifies back when cooled.
 // - Make it: mix Molten Steel with Molten Nickel.
@@ -10,15 +10,18 @@
 // Load it in the Mod Manager as: stainless_steel_solid.js
 // Note: don't load this together with stainless_steel.js; both define "stainless_steel".
 
-// Texture: checkerboard of 10x10 squares (dark gray / light gray),
-// with a bright 1-pixel line running top to bottom through the middle of every square.
-var STAINLESS_SQUARE = 10;
-var STAINLESS_LINE_COLUMN = 5; // which column inside each square holds the line
+// Texture: pixel-by-pixel checkerboard (dark gray / light gray),
+// with a darker 1-pixel line running top to bottom every 25 pixels.
+var STAINLESS_SQUARE = 1;        // size of each checker square, in pixels
+var STAINLESS_LINE_EVERY = 25;   // distance between the vertical lines, in pixels
+// Tile must repeat cleanly for both the checker and the lines.
+var stainlessTileW = STAINLESS_LINE_EVERY * STAINLESS_SQUARE * 2;
+var stainlessTileH = STAINLESS_SQUARE * 2;
 var stainlessPattern = [];
-for (var y = 0; y < STAINLESS_SQUARE * 2; y++) {
+for (var y = 0; y < stainlessTileH; y++) {
 	var row = "";
-	for (var x = 0; x < STAINLESS_SQUARE * 2; x++) {
-		if (x % STAINLESS_SQUARE === STAINLESS_LINE_COLUMN) { row += "S"; }
+	for (var x = 0; x < stainlessTileW; x++) {
+		if (x % STAINLESS_LINE_EVERY === 0) { row += "S"; }
 		else if ((Math.floor(x / STAINLESS_SQUARE) + Math.floor(y / STAINLESS_SQUARE)) % 2 === 0) { row += "D"; }
 		else { row += "L"; }
 	}
@@ -30,7 +33,7 @@ elements.stainless_steel = {
 	colorKey: {
 		"D": "#6b7176", // dark gray squares
 		"L": "#b4bcc2", // light gray squares
-		"S": "#dfe4e8"  // light line, top to bottom
+		"S": "#3f4448"  // darker gray line, top to bottom
 	},
 	colorPattern: stainlessPattern,
 	grain: 0,
