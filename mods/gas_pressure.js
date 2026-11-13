@@ -154,3 +154,134 @@ runEveryTick(function() {
 	if (pixelTicks % PRESSURE_SCAN_TICKS !== 0) return;
 	gasPressureScan();
 });
+
+// ---------------------------------------------------------------------------
+// Pumping a box with the Pressure tool
+// Hold the Pressure tool inside a closed box (empty or full of gas). After 15 seconds of pumping,
+// the box bursts: a hole is blown through its top (or a side, if there's no top). This works on any
+// wall, even indestructible Wall. Moving to a different box, letting go for a while, or a leak
+// resets the timer.
+
+var PUMP_BURST_SECONDS = 15;
+var PUMP_HOLE_WIDTH = 5;        // how wide the hole is
+var PUMP_MAX_WALL = 12;         // thickest wall it can blow through
+var PUMP_MAX_BOX = 6000;        // bigger spaces than this count as open
+var PUMP_FORGET_TICKS = 30;     // timer resets if you stop pumping this long
+
+var pumpState = { key: null, ticks: 0, lastTick: -1000, warned: 0 };
+
+// Can pressure spread through this cell? (empty space or a gas)
+function pumpPassable(x, y) {
+	if (isEmpty(x, y, true)) return true;
+	var p = pixelMap[x][y];
+	return !!p && gasPressureApplies(p);
+}
+
+// Find the closed space under the cursor. Returns null if it's open (leaks to the edge) or too big.
+function pumpFindBox(sx, sy) {
+	if (outOfBounds(sx, sy) || !pumpPassable(sx, sy)) return null;
+	var seen = {};
+	var cells = [];
+	var queue = [[sx, sy]];
+	seen[sx + "," + sy] = true;
+	var minKey = null;
+	while (queue.length) {
+		var c = queue.pop();
+		cells.push(c);
+		if (cells.length > PUMP_MAX_BOX) return null;
+		var k = c[0] * 100000 + c[1];
+		if (minKey === null || k < minKey) minKey = k;
+		for (var i = 0; i < adjacentCoords.length; i++) {
+			var nx = c[0] + adjacentCoords[i][0], ny = c[1] + adjacentCoords[i][1];
+			if (outOfBounds(nx, ny)) return null;            // reaches the edge of the world: not a box
+			var key = nx + "," + ny;
+			if (seen[key]) continue;
+			if (!pumpPassable(nx, ny)) continue;
+			seen[key] = true;
+			queue.push([nx, ny]);
+		}
+	}
+	return { cells: cells, seen: seen, key: minKey + ":" + cells.length };
+}
+
+// Blow a hole in the top of the box (or a side if the top can't be found).
+function pumpBurst(box) {
+	var sumX = 0;
+	for (var i = 0; i < box.cells.length; i++) sumX += box.cells[i][0];
+	var midX = sumX / box.cells.length;
+	var dirs = [[0, -1], [-1, 0], [1, 0], [0, 1]];   // top first, then sides, then bottom
+	for (var d = 0; d < dirs.length; d++) {
+		var dx = dirs[d][0], dy = dirs[d][1];
+		// Wall cells touching the box on this side.
+		var edge = [];
+		for (var j = 0; j < box.cells.length; j++) {
+			var c = box.cells[j];
+			var wx = c[0] + dx, wy = c[1] + dy;
+			if (outOfBounds(wx, wy) || box.seen[wx + "," + wy]) continue;
+			edge.push(c);
+		}
+		if (edge.length === 0) continue;
+		// The outermost row on this side (e.g. the very top), and the cell nearest the middle.
+		var best = null;
+		for (var m = 0; m < edge.length; m++) {
+			var e = edge[m];
+			var depth = dy !== 0 ? e[1] * dy : e[0] * dx;
+			var off = dy !== 0 ? Math.abs(e[0] - midX) : 0;
+			if (!best || depth > best.depth || (depth === best.depth && off < best.off)) best = { c: e, depth: depth, off: off };
+		}
+		// Dig the hole outward through the wall.
+		var broke = 0;
+		var half = Math.floor(PUMP_HOLE_WIDTH / 2);
+		for (var w = -half; w <= half; w++) {
+			var hx = best.c[0] + (dy !== 0 ? w : 0), hy = best.c[1] + (dx !== 0 ? w : 0);
+			for (var s = 1; s <= PUMP_MAX_WALL; s++) {
+				var x = hx + dx * s, y = hy + dy * s;
+				if (outOfBounds(x, y)) break;
+				if (isEmpty(x, y, true)) break;               // through to the outside
+				var p = pixelMap[x][y];
+				if (!p) break;
+				if (gasPressureApplies(p)) break;
+				deletePixel(x, y);
+				broke++;
+			}
+		}
+		if (broke === 0) continue;
+		// Let the gas go: its pressure drops and it gets flung out of the hole.
+		for (var q = 0; q < box.cells.length; q++) {
+			var g = pixelMap[box.cells[q][0]] && pixelMap[box.cells[q][0]][box.cells[q][1]];
+			if (g) g.pressure = 0;
+		}
+		logMessage("BANG! The box burst open!");
+		return true;
+	}
+	return false;
+}
+
+runEveryTick(function() {
+	if (paused) return;
+	if (!(mouseIsDown && mouseType === "left" && currentElement === "pressure")) {
+		if (pixelTicks - pumpState.lastTick > PUMP_FORGET_TICKS) { pumpState.key = null; pumpState.ticks = 0; pumpState.warned = 0; }
+		return;
+	}
+	if (pixelTicks % 3 !== 0) return;          // checking every 3 ticks is plenty
+	var box = pumpFindBox(mousePos.x, mousePos.y);
+	if (!box) { pumpState.key = null; pumpState.ticks = 0; pumpState.warned = 0; return; }
+	if (box.key !== pumpState.key || pixelTicks - pumpState.lastTick > PUMP_FORGET_TICKS) {
+		pumpState.key = box.key; pumpState.ticks = 0; pumpState.warned = 0;
+	}
+	pumpState.ticks += 3;
+	pumpState.lastTick = pixelTicks;
+	// Any gas in the box is compressed too.
+	var level = Math.min(PRESSURE_MAX, (pumpState.ticks / ((tps || 30) * PUMP_BURST_SECONDS)) * PRESSURE_BURST_AT);
+	for (var i = 0; i < box.cells.length; i++) {
+		var g = pixelMap[box.cells[i][0]] && pixelMap[box.cells[i][0]][box.cells[i][1]];
+		if (g && (g.pressure || 0) < level) g.pressure = level;
+	}
+	var seconds = pumpState.ticks / (tps || 30);
+	if (seconds >= 5 && pumpState.warned < 1) { pumpState.warned = 1; logMessage("The box is creaking..."); }
+	if (seconds >= 10 && pumpState.warned < 2) { pumpState.warned = 2; logMessage("The box is about to burst!"); }
+	if (seconds >= PUMP_BURST_SECONDS) {
+		pumpBurst(box);
+		pumpState.key = null; pumpState.ticks = 0; pumpState.warned = 0;
+	}
+});
