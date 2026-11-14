@@ -201,11 +201,14 @@ function pumpWallPixels(box) {
 
 // Draw the shaking walls: wipe where they really are, then draw them jiggled a little.
 renderPostPixel(function(ctx) {
-	if (!pumpState.shake || pumpState.shakeStrength <= 0 || paused) return;
+	if (paused) return;
+	var list = null, strength = 0;
+	if (pumpState.shake && pumpState.shakeStrength > 0) { list = pumpState.shake; strength = pumpState.shakeStrength; }
+	else if (pumpState.jolt && pixelTicks < pumpState.jolt.until) { list = pumpState.jolt.pixels; strength = 1.6 * (pumpState.jolt.until - pixelTicks) / 12; }
+	if (!list) return;
 	var ps = pixelSize;
-	var amp = pumpState.shakeStrength * ps * 0.9;
+	var amp = strength * ps * 0.9;
 	var ox = (Math.random() * 2 - 1) * amp, oy = (Math.random() * 2 - 1) * amp;
-	var list = pumpState.shake;
 	for (var i = 0; i < list.length; i++) {
 		var p = list[i];
 		if (!p.del) ctx.clearRect(p.x * ps, p.y * ps, ps, ps);
@@ -253,6 +256,68 @@ function pumpFindBox(sx, sy) {
 	return { cells: cells, seen: seen, key: minKey + ":" + cells.length };
 }
 
+// What a broken bit of wall turns into as it flies off.
+function pumpDebrisOf(element) {
+	var info = elements[element] || {};
+	var into = info.breakInto;
+	if (Array.isArray(into)) into = into[Math.floor(Math.random() * into.length)];
+	if (into && elements[into]) return into;
+	if (element.indexOf("glass") !== -1 && elements.glass_shard) return "glass_shard";
+	if (info.conduct && elements.metal_scrap) return "metal_scrap";
+	return elements.gravel ? "gravel" : "dust";
+}
+
+// Give a pixel a shove so it flies (uses the mortar flight below).
+function pumpFling(p, vx, vy) {
+	if (!p || p.del) return;
+	p.mortarVx = vx; p.mortarVy = vy;
+	p.mortarFx = p.x; p.mortarFy = p.y;
+	p.mortarAge = 0;
+	mortarFlying.push(p);
+}
+
+// The blast: wall pieces fly off, the stuff inside rushes out, a puff of smoke, and the box jolts.
+function pumpBlast(box, broken, dx, dy) {
+	var hx = 0, hy = 0;
+	for (var i = 0; i < broken.length; i++) { hx += broken[i].x; hy += broken[i].y; }
+	hx /= broken.length; hy /= broken.length;
+	pumpState.mortarDir = [dx, dy];
+	// Flying debris (about half the broken bits; the rest is blown to dust).
+	for (var j = 0; j < broken.length; j++) {
+		var b = broken[j];
+		if (Math.random() < 0.5 || !isEmpty(b.x, b.y)) continue;
+		createPixel(pumpDebrisOf(b.element), b.x, b.y);
+		var d = pixelMap[b.x][b.y];
+		var speed = 3 + Math.random() * 4;
+		var side = (Math.random() * 2 - 1) * 2.5;
+		pumpFling(d, dx * speed - dy * side, dy * speed + dx * side);
+	}
+	// A puff of smoke out of the hole.
+	for (var k = 0; k < 8; k++) {
+		var sx = Math.round(hx + dx * 2 + (Math.random() * 6 - 3) * (dy !== 0 ? 1 : 0));
+		var sy = Math.round(hy + dy * 2 + (Math.random() * 6 - 3) * (dx !== 0 ? 1 : 0));
+		if (!outOfBounds(sx, sy) && isEmpty(sx, sy)) {
+			createPixel("smoke", sx, sy);
+			var sp = 1.5 + Math.random() * 2;
+			pumpFling(pixelMap[sx][sy], dx * sp + (Math.random() - 0.5), dy * sp + (Math.random() - 0.5));
+		}
+	}
+	// The stuff inside rushes towards the hole and out.
+	for (var q = 0; q < box.cells.length; q++) {
+		var c = box.cells[q];
+		var g = pixelMap[c[0]] && pixelMap[c[0]][c[1]];
+		if (!g) continue;
+		g.pressure = 0;
+		var ox = hx - c[0], oy = hy - c[1];
+		var dist = Math.sqrt(ox * ox + oy * oy) || 1;
+		if (dist > 25) continue;
+		var push = 4 * (1 - dist / 30);
+		pumpFling(g, ox / dist * push + dx * 2, oy / dist * push + dy * 2);
+	}
+	// The whole box jolts for a moment.
+	pumpState.jolt = { pixels: pumpWallPixels(box), until: pixelTicks + 12 };
+}
+
 // Blow a hole in the top of the box (or a side if the top can't be found).
 function pumpBurst(box) {
 	var sumX = 0;
@@ -278,28 +343,37 @@ function pumpBurst(box) {
 			var off = dy !== 0 ? Math.abs(e[0] - midX) : 0;
 			if (!best || depth > best.depth || (depth === best.depth && off < best.off)) best = { c: e, depth: depth, off: off };
 		}
-		// Dig the hole outward through the wall.
-		var broke = 0;
-		var half = Math.floor(PUMP_HOLE_WIDTH / 2);
+		// Dig a jagged hole outward through the wall: widest in the middle, ragged at the edges.
+		var broken = [];
+		var half = Math.floor(PUMP_HOLE_WIDTH / 2) + 2;
+		var hx0 = best.c[0], hy0 = best.c[1];
 		for (var w = -half; w <= half; w++) {
-			var hx = best.c[0] + (dy !== 0 ? w : 0), hy = best.c[1] + (dx !== 0 ? w : 0);
-			for (var s = 1; s <= PUMP_MAX_WALL; s++) {
+			var edgeness = Math.abs(w) / half;                     // 0 in the middle, 1 at the edges
+			if (edgeness > 0.6 && Math.random() < edgeness - 0.3) continue;
+			var hx = hx0 + (dy !== 0 ? w : 0), hy = hy0 + (dx !== 0 ? w : 0);
+			var maxDepth = edgeness > 0.6 ? 1 + Math.floor(Math.random() * 3) : PUMP_MAX_WALL;
+			for (var s = 1; s <= maxDepth; s++) {
 				var x = hx + dx * s, y = hy + dy * s;
-				if (outOfBounds(x, y)) break;
-				if (isEmpty(x, y, true)) break;               // through to the outside
+				if (outOfBounds(x, y) || isEmpty(x, y, true)) break;
 				var p = pixelMap[x][y];
-				if (!p) break;
-				if (gasPressureApplies(p)) break;
+				if (!p || gasPressureApplies(p)) break;
+				broken.push({ x: x, y: y, element: p.element });
 				deletePixel(x, y);
-				broke++;
 			}
 		}
-		if (broke === 0) continue;
-		// Let the gas go: its pressure drops and it gets flung out of the hole.
-		for (var q = 0; q < box.cells.length; q++) {
-			var g = pixelMap[box.cells[q][0]] && pixelMap[box.cells[q][0]][box.cells[q][1]];
-			if (g) g.pressure = 0;
+		// A few cracks around the hole.
+		for (var k = 0; k < broken.length; k++) {
+			for (var n = 0; n < squareCoords.length; n++) {
+				var cx = broken[k].x + squareCoords[n][0], cy = broken[k].y + squareCoords[n][1];
+				if (Math.random() > 0.12 || outOfBounds(cx, cy) || isEmpty(cx, cy, true) || box.seen[cx + "," + cy]) continue;
+				var cp = pixelMap[cx][cy];
+				if (!cp || gasPressureApplies(cp) || cp.mortarVx !== undefined) continue;
+				broken.push({ x: cx, y: cy, element: cp.element });
+				deletePixel(cx, cy);
+			}
 		}
+		if (broken.length === 0) continue;
+		pumpBlast(box, broken, dx, dy);
 		logMessage("BANG! The box burst open!");
 		return true;
 	}
