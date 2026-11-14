@@ -96,7 +96,9 @@ function gasPressureScan() {
 			for (var k = 0; k < adjacentCoords.length; k++) {
 				var dx = adjacentCoords[k][0], dy = adjacentCoords[k][1];
 				var nx = g.x + dx, ny = g.y + dy;
-				if (outOfBounds(nx, ny) || isEmpty(nx, ny)) { open = true; continue; }
+				if (ny < 0) { open = true; continue; }            // the top edge is open sky
+				if (outOfBounds(nx, ny)) continue;                // the floor and sides of the screen are walls
+				if (isEmpty(nx, ny)) { open = true; continue; }
 				var n = pixelMap[nx][ny];
 				if (n.pocketScan === scan) continue;
 				if (gasPressureApplies(n)) { n.pocketScan = scan; n.pocketId = pocketId; queue.push(n); }
@@ -158,17 +160,63 @@ runEveryTick(function() {
 // ---------------------------------------------------------------------------
 // Pumping a box with the Pressure tool
 // Hold the Pressure tool inside a closed box (empty or full of gas). After 15 seconds of pumping,
-// the box bursts: a hole is blown through its top (or a side, if there's no top). This works on any
+// the box bursts: a hole is blown through its top (or a side, if there's no top). From 8 seconds the box
+// shakes, harder and harder, as a warning. This works on any
 // wall, even indestructible Wall. Moving to a different box, letting go for a while, or a leak
 // resets the timer.
 
 var PUMP_BURST_SECONDS = 15;
 var PUMP_HOLE_WIDTH = 5;        // how wide the hole is
 var PUMP_MAX_WALL = 12;         // thickest wall it can blow through
-var PUMP_MAX_BOX = 6000;        // bigger spaces than this count as open
+var PUMP_MAX_BOX = 20000;       // bigger spaces than this count as open (or half the screen, if bigger)
 var PUMP_FORGET_TICKS = 30;     // timer resets if you stop pumping this long
 
-var pumpState = { key: null, ticks: 0, lastTick: -1000, warned: 0 };
+var PUMP_SHAKE_FROM = 8;       // seconds of pumping before the box starts shaking
+
+var pumpState = { key: null, ticks: 0, lastTick: -1000, warned: 0, shake: null, shakeStrength: 0 };
+
+function pumpReset() {
+	pumpState.key = null; pumpState.ticks = 0; pumpState.warned = 0;
+	pumpState.shake = null; pumpState.shakeStrength = 0;
+}
+
+// The wall pixels around a box (going through the wall's thickness), for shaking.
+function pumpWallPixels(box) {
+	var found = new Set();
+	for (var i = 0; i < box.cells.length; i++) {
+		var c = box.cells[i];
+		for (var k = 0; k < adjacentCoords.length; k++) {
+			var dx = adjacentCoords[k][0], dy = adjacentCoords[k][1];
+			for (var s = 1; s <= PUMP_MAX_WALL; s++) {
+				var x = c[0] + dx * s, y = c[1] + dy * s;
+				if (outOfBounds(x, y) || isEmpty(x, y, true) || box.seen[x + "," + y]) break;
+				var p = pixelMap[x][y];
+				if (!p || gasPressureApplies(p)) break;
+				found.add(p);
+			}
+		}
+	}
+	return Array.from(found);
+}
+
+// Draw the shaking walls: wipe where they really are, then draw them jiggled a little.
+renderPostPixel(function(ctx) {
+	if (!pumpState.shake || pumpState.shakeStrength <= 0 || paused) return;
+	var ps = pixelSize;
+	var amp = pumpState.shakeStrength * ps * 0.9;
+	var ox = (Math.random() * 2 - 1) * amp, oy = (Math.random() * 2 - 1) * amp;
+	var list = pumpState.shake;
+	for (var i = 0; i < list.length; i++) {
+		var p = list[i];
+		if (!p.del) ctx.clearRect(p.x * ps, p.y * ps, ps, ps);
+	}
+	for (var j = 0; j < list.length; j++) {
+		var q = list[j];
+		if (q.del) continue;
+		ctx.fillStyle = q.color;
+		ctx.fillRect(q.x * ps + ox, q.y * ps + oy, ps, ps);
+	}
+});
 
 // Can pressure spread through this cell? (empty space or a gas)
 function pumpPassable(x, y) {
@@ -188,12 +236,13 @@ function pumpFindBox(sx, sy) {
 	while (queue.length) {
 		var c = queue.pop();
 		cells.push(c);
-		if (cells.length > PUMP_MAX_BOX) return null;
+		if (cells.length > Math.max(PUMP_MAX_BOX, (width * height) / 2)) return null;
 		var k = c[0] * 100000 + c[1];
 		if (minKey === null || k < minKey) minKey = k;
 		for (var i = 0; i < adjacentCoords.length; i++) {
 			var nx = c[0] + adjacentCoords[i][0], ny = c[1] + adjacentCoords[i][1];
-			if (outOfBounds(nx, ny)) return null;            // reaches the edge of the world: not a box
+			if (ny < 0) return null;                          // reaches the sky (top edge): not a box
+			if (outOfBounds(nx, ny)) continue;                // bottom and sides of the screen count as walls
 			var key = nx + "," + ny;
 			if (seen[key]) continue;
 			if (!pumpPassable(nx, ny)) continue;
@@ -260,12 +309,12 @@ function pumpBurst(box) {
 runEveryTick(function() {
 	if (paused) return;
 	if (!(mouseIsDown && mouseType === "left" && currentElement === "pressure")) {
-		if (pixelTicks - pumpState.lastTick > PUMP_FORGET_TICKS) { pumpState.key = null; pumpState.ticks = 0; pumpState.warned = 0; }
+		if (pixelTicks - pumpState.lastTick > PUMP_FORGET_TICKS) { pumpReset(); }
 		return;
 	}
 	if (pixelTicks % 3 !== 0) return;          // checking every 3 ticks is plenty
 	var box = pumpFindBox(mousePos.x, mousePos.y);
-	if (!box) { pumpState.key = null; pumpState.ticks = 0; pumpState.warned = 0; return; }
+	if (!box) { pumpReset(); return; }
 	if (box.key !== pumpState.key || pixelTicks - pumpState.lastTick > PUMP_FORGET_TICKS) {
 		pumpState.key = box.key; pumpState.ticks = 0; pumpState.warned = 0;
 	}
@@ -280,8 +329,13 @@ runEveryTick(function() {
 	var seconds = pumpState.ticks / (tps || 30);
 	if (seconds >= 5 && pumpState.warned < 1) { pumpState.warned = 1; logMessage("The box is creaking..."); }
 	if (seconds >= 10 && pumpState.warned < 2) { pumpState.warned = 2; logMessage("The box is about to burst!"); }
+	// Shake harder and harder as it gets close to bursting.
+	if (seconds >= PUMP_SHAKE_FROM) {
+		pumpState.shake = pumpWallPixels(box);
+		pumpState.shakeStrength = Math.min(1, (seconds - PUMP_SHAKE_FROM) / (PUMP_BURST_SECONDS - PUMP_SHAKE_FROM) + 0.15);
+	}
 	if (seconds >= PUMP_BURST_SECONDS) {
 		pumpBurst(box);
-		pumpState.key = null; pumpState.ticks = 0; pumpState.warned = 0;
+		pumpReset();
 	}
 });
