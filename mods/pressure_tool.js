@@ -15,6 +15,7 @@
 //   Foam / Bubble -> popped (gone)
 //
 // Using it on a gas compresses it, building up gas pressure (see gas_pressure.js).
+// Holding it on powder inside a tube fires the powder out like a mortar (see gas_pressure.js).
 //
 // Other mods can add their own: set  elements.X.pressureInto = "Y"  (and optionally pressureChance).
 
@@ -35,12 +36,22 @@ var PRESSURE_RECIPES = {
 	bubble:      { into: null,          chance: 0.5 }
 };
 
+var pressureMortarCache = { tick: -1, set: null };
+
 elements.pressure = {
 	color: ["#5b6b8c", "#7a8bb0", "#5b6b8c"],
 	category: "tools",
 	desc: "Squeeze things into denser versions, like Graphite into Diamond or Sand into Packed Sand. Hold Shift to squeeze harder.",
 	tool: function(pixel) {
 		var info = elements[pixel.element];
+		// Powder inside a tube is being loaded into a mortar (gas_pressure.js), so don't squeeze it.
+		if (info && info.movable === true && typeof mortarFindBlobAt === "function") {
+			if (pressureMortarCache.tick !== pixelTicks) {
+				var blob = mortarFindBlobAt(mousePos.x, mousePos.y);
+				pressureMortarCache = { tick: pixelTicks, set: blob ? new Set(blob.plug) : null };
+			}
+			if (pressureMortarCache.set && pressureMortarCache.set.has(pixel)) return;
+		}
 		var recipe = PRESSURE_RECIPES[pixel.element];
 		if (info && info.pressureInto !== undefined) {
 			recipe = { into: info.pressureInto, chance: info.pressureChance || 0.05 };

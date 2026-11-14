@@ -313,6 +313,16 @@ runEveryTick(function() {
 		return;
 	}
 	if (pixelTicks % 3 !== 0) return;          // checking every 3 ticks is plenty
+	// Pressing on powder that's inside a tube or container: fire it out of the opening like a mortar.
+	var blob = mortarFindBlobAt(mousePos.x, mousePos.y);
+	if (blob) {
+		if (pumpState.key !== "blob" || pixelTicks - pumpState.lastTick > PUMP_FORGET_TICKS) { pumpReset(); pumpState.key = "blob"; }
+		pumpState.ticks += 3;
+		pumpState.lastTick = pixelTicks;
+		pumpState.mortarCharging = pixelTicks;
+		if (pumpState.ticks / (tps || 30) >= MORTAR_CHARGE_SECONDS) { mortarFire(blob.plug, blob.dx, blob.dy); pumpReset(); }
+		return;
+	}
 	var box = pumpFindBox(mousePos.x, mousePos.y);
 	if (!box) { pumpReset(); return; }
 	if (box.key !== pumpState.key || pixelTicks - pumpState.lastTick > PUMP_FORGET_TICKS) {
@@ -320,6 +330,12 @@ runEveryTick(function() {
 	}
 	pumpState.ticks += 3;
 	pumpState.lastTick = pixelTicks;
+	// A tube with a plug of powder (or liquid) that has somewhere to go: fire it like a mortar.
+	var plug = mortarFindPlug(box);
+	if (plug) {
+		if (pumpState.ticks / (tps || 30) >= MORTAR_CHARGE_SECONDS) { mortarFireFromBox(box, plug); pumpReset(); }
+		return;
+	}
 	// Any gas in the box is compressed too.
 	var level = Math.min(PRESSURE_MAX, (pumpState.ticks / ((tps || 30) * PUMP_BURST_SECONDS)) * PRESSURE_BURST_AT);
 	for (var i = 0; i < box.cells.length; i++) {
@@ -339,3 +355,177 @@ runEveryTick(function() {
 		pumpReset();
 	}
 });
+
+// ---------------------------------------------------------------------------
+// Mortar
+// Pump the Pressure tool into a tube (cylinder) that's blocked by a plug of powder or liquid, where the plug
+// has open space on its other side. After a short charge the whole plug is fired out of the tube at high
+// speed, flying in arcs. It works in any direction: straight up, sideways like a cannon, or slanted.
+
+var MORTAR_CHARGE_SECONDS = 1;   // how long you pump before it fires
+var MORTAR_SPEED = 5;            // launch speed, in pixels per tick
+var MORTAR_GRAVITY = 0.25;       // how fast flying pixels fall back down
+var MORTAR_SPREAD = 1.6;         // how much the shot spreads out sideways
+var MORTAR_MAX_PLUG = 4000;      // biggest plug it can fire
+var MORTAR_MAX_FLIGHT = 150;     // ticks before a flying pixel goes back to normal
+
+function mortarLoose(p) {
+	var info = elements[p.element];
+	return !!info && info.movable === true && info.state !== "gas" && !p.del;
+}
+
+// Loose pixels touching the box, and connected to them. Only counts as a plug if it can escape somewhere.
+function mortarFindPlug(box) {
+	var seen = {};
+	var plug = [];
+	var queue = [];
+	for (var i = 0; i < box.cells.length; i++) {
+		var c = box.cells[i];
+		for (var k = 0; k < adjacentCoords.length; k++) {
+			var x = c[0] + adjacentCoords[k][0], y = c[1] + adjacentCoords[k][1];
+			if (outOfBounds(x, y) || box.seen[x + "," + y] || seen[x + "," + y]) continue;
+			var p = pixelMap[x][y];
+			if (p && mortarLoose(p)) { seen[x + "," + y] = true; queue.push(p); }
+		}
+	}
+	if (queue.length === 0) return null;
+	var escapes = false;
+	while (queue.length) {
+		var q = queue.pop();
+		plug.push(q);
+		if (plug.length > MORTAR_MAX_PLUG) return null;
+		for (var j = 0; j < adjacentCoords.length; j++) {
+			var nx = q.x + adjacentCoords[j][0], ny = q.y + adjacentCoords[j][1];
+			if (ny < 0) { escapes = true; continue; }
+			if (outOfBounds(nx, ny)) continue;
+			var key = nx + "," + ny;
+			if (box.seen[key] || seen[key]) continue;
+			if (isEmpty(nx, ny, true)) { escapes = true; continue; }
+			var n = pixelMap[nx][ny];
+			if (n && gasPressureApplies(n)) { escapes = true; continue; }
+			if (n && mortarLoose(n)) { seen[key] = true; queue.push(n); }
+		}
+	}
+	return escapes ? plug : null;
+}
+
+var mortarFlying = [];
+
+// Fire away from the middle of the gas space, through the middle of the plug.
+function mortarFireFromBox(box, plug) {
+	var bx = 0, by = 0, px = 0, py = 0;
+	for (var i = 0; i < box.cells.length; i++) { bx += box.cells[i][0]; by += box.cells[i][1]; }
+	for (var j = 0; j < plug.length; j++) { px += plug[j].x; py += plug[j].y; }
+	bx /= box.cells.length; by /= box.cells.length; px /= plug.length; py /= plug.length;
+	mortarFire(plug, px - bx, py - by);
+}
+
+function mortarFire(plug, dx, dy) {
+	var len = Math.sqrt(dx * dx + dy * dy) || 1;
+	dx /= len; dy /= len;
+	// Snap to straight up/down/sideways when it's close, so tubes fire straight.
+	if (Math.abs(dx) < 0.35) dx = 0;
+	if (Math.abs(dy) < 0.35) dy = 0;
+	len = Math.sqrt(dx * dx + dy * dy) || 1;
+	dx /= len; dy /= len;
+	var mortarShotPower = 0.9 + Math.random() * 0.3;
+	for (var m = 0; m < plug.length; m++) {
+		var p = plug[m];
+		var speed = MORTAR_SPEED * mortarShotPower;   // the whole plug moves together
+		var spread = (Math.random() * 2 - 1) * MORTAR_SPREAD;
+		p.mortarVx = dx * speed - dy * spread;
+		p.mortarVy = dy * speed + dx * spread;
+		p.mortarFx = p.x; p.mortarFy = p.y;
+		p.mortarAge = 0;
+		mortarFlying.push(p);
+	}
+	pumpState.mortarDir = [dx, dy];
+	logMessage("BOOM!");
+}
+
+runEveryTick(function() {
+	if (paused || mortarFlying.length === 0) return;
+	// Move the front of the plug first so it doesn't get stuck behind itself.
+	var dir = pumpState.mortarDir || [0, -1];
+	mortarFlying.sort(function(a, b) { return (b.x * dir[0] + b.y * dir[1]) - (a.x * dir[0] + a.y * dir[1]); });
+	var still = [];
+	for (var i = 0; i < mortarFlying.length; i++) {
+		var p = mortarFlying[i];
+		if (p.del || pixelMap[p.x] === undefined || pixelMap[p.x][p.y] !== p) continue;
+		p.mortarAge++;
+		var tx = p.mortarFx + p.mortarVx, ty = p.mortarFy + p.mortarVy;
+		// Step one cell at a time towards where it's going. If the way is blocked, slide along the wall
+		// (so shots fly up a tube and spray out of the top), or wait behind other flying bits.
+		var steps = Math.max(Math.abs(Math.round(tx) - p.x), Math.abs(Math.round(ty) - p.y));
+		var sx = p.x, sy = p.y, blocked = false, friend = false;
+		var mortarFree = function(x, y) {
+			if (outOfBounds(x, y)) return "wall";
+			if (isEmpty(x, y)) return "free";
+			var o = pixelMap[x][y];
+			return (o && o.mortarVx !== undefined) ? "friend" : "wall";
+		};
+		for (var s = 1; s <= steps; s++) {
+			var cx = Math.round(sx + (tx - sx) * s / steps), cy = Math.round(sy + (ty - sy) * s / steps);
+			if (cx === p.x && cy === p.y) continue;
+			var f = mortarFree(cx, cy);
+			if (f === "free") { movePixel(p, cx, cy); continue; }
+			if (f === "friend") { friend = true; break; }
+			// Blocked: try sliding straight up/down, then straight sideways.
+			var fv = cy !== p.y ? mortarFree(p.x, cy) : "wall";
+			if (fv === "free") { movePixel(p, p.x, cy); continue; }
+			var fh = cx !== p.x ? mortarFree(cx, p.y) : "wall";
+			if (fh === "free") { movePixel(p, cx, p.y); continue; }
+			if (fv === "friend" || fh === "friend") { friend = true; break; }
+			blocked = true; break;
+		}
+		if (!friend) p.mortarVy = Math.min(4, p.mortarVy + MORTAR_GRAVITY);   // waiting bits keep their speed
+		if (blocked) {
+			// Hit something head on: lose most of the speed and carry on falling normally.
+			p.mortarFx = p.x; p.mortarFy = p.y;
+			p.mortarVx *= 0.3;
+			if (p.mortarVy < 0) p.mortarVy = 0;
+		}
+		else { p.mortarFx = p.x + (tx - Math.round(tx)); p.mortarFy = p.y + (ty - Math.round(ty)); }
+		var done = p.mortarAge > MORTAR_MAX_FLIGHT || (blocked && Math.abs(p.mortarVx) < 0.5 && p.mortarVy >= 0);
+		if (done) { delete p.mortarVx; delete p.mortarVy; delete p.mortarFx; delete p.mortarFy; delete p.mortarAge; }
+		else still.push(p);
+	}
+	mortarFlying = still;
+});
+
+// Powder under the cursor that's mostly surrounded by walls, with an opening: returns the powder and
+// which way the opening is. Powder lying out in the open (a pile on the ground) doesn't count.
+var MORTAR_ENCLOSED = 0.6;   // share of the powder's edge that must be walls
+
+function mortarFindBlobAt(x, y) {
+	if (outOfBounds(x, y) || isEmpty(x, y, true)) return null;
+	var start = pixelMap[x][y];
+	if (!start || !mortarLoose(start)) return null;
+	var seen = {};
+	seen[x + "," + y] = true;
+	var plug = [], queue = [start];
+	var solid = 0, open = 0, ox = 0, oy = 0, cx = 0, cy = 0;
+	var counted = {};
+	while (queue.length) {
+		var p = queue.pop();
+		plug.push(p);
+		cx += p.x; cy += p.y;
+		if (plug.length > MORTAR_MAX_PLUG) return null;
+		for (var k = 0; k < adjacentCoords.length; k++) {
+			var nx = p.x + adjacentCoords[k][0], ny = p.y + adjacentCoords[k][1];
+			var key = nx + "," + ny;
+			if (seen[key]) continue;
+			if (ny < 0) { open++; ox += nx; oy += ny; continue; }
+			if (outOfBounds(nx, ny)) { solid++; continue; }
+			var n = isEmpty(nx, ny, true) ? null : pixelMap[nx][ny];
+			if (n && mortarLoose(n)) { seen[key] = true; queue.push(n); continue; }
+			if (counted[key]) continue;
+			counted[key] = true;
+			if (!n || gasPressureApplies(n)) { open++; ox += nx; oy += ny; }
+			else solid++;
+		}
+	}
+	if (open === 0 || solid / (solid + open) < MORTAR_ENCLOSED) return null;
+	cx /= plug.length; cy /= plug.length; ox /= open; oy /= open;
+	return { plug: plug, dx: ox - cx, dy: oy - cy };
+}
